@@ -1,7 +1,7 @@
 // main.js — app setup, render loop, UI wiring.
 
 import * as THREE from 'three';
-import { applyOffAxisProjection, flatScreenRect, setFlatScreenRect } from './projection.js?v=3';
+import { applyOffAxisProjection, flatScreenRect, setFlatScreenRect } from './projection.js?v=4';
 import {
   FaceTracker,
   CameraError,
@@ -9,8 +9,8 @@ import {
   estimateEye,
   effectivePupilPx,
   solveFovFromDistance,
-} from './tracking.js?v=3';
-import { buildScene, SCENE_OPTIONS } from './scenes.js?v=3';
+} from './tracking.js?v=4';
+import { buildScene, SCENE_OPTIONS } from './scenes.js?v=4';
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -59,6 +59,8 @@ const DEFS = [
 
   { group: 'View' },
   { key: 'scene', label: 'Scene', type: 'select', def: 'grid', options: SCENE_OPTIONS },
+  { key: 'edgeBrightness', label: 'Edge brightness', type: 'range', def: 1, step: 0.01, min: 0, max: 2,
+    hint: 'Grid lines and object outlines. Lower = less ghosting.' },
   { key: 'debug', label: 'Show debug', type: 'checkbox', def: false },
 ];
 
@@ -213,6 +215,7 @@ function setSetting(key, value) {
 
 function onSettingChanged(key) {
   if (key === 'screenW' || key === 'screenH' || key === 'scene') rebuildScene();
+  if (key === 'edgeBrightness') applyEdgeBrightness();
   if (key === 'smoothing') filter.setStrength(settings.smoothing);
   if (key === 'debug') document.body.classList.toggle('debug', settings.debug);
 }
@@ -333,6 +336,16 @@ function rebuildScene() {
   scene.add(current.root);
   scene.background = current.background;
   updateLineResolution();
+  applyEdgeBrightness();
+}
+
+function applyEdgeBrightness() {
+  if (!current) return;
+  const k = settings.edgeBrightness;
+  current.root.traverse((o) => {
+    const m = o.material;
+    if (m && m.userData.edgeColor) m.color.copy(m.userData.edgeColor).multiplyScalar(k);
+  });
 }
 
 function updateLineResolution() {
