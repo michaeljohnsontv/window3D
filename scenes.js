@@ -16,6 +16,9 @@ export const SCENE_OPTIONS = [
 ];
 
 const BG_DARK = '#1b2331';
+// Soft grey for outlines and edges: bright, high-contrast edges ghost badly
+// through leaky anaglyph lenses. Further scaled by the Edge brightness slider.
+const EDGE = '#8c929b';
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -30,6 +33,7 @@ function fatLines(positions, color, widthPx, opacity = 1) {
     transparent: opacity < 1,
     opacity,
   });
+  mat.userData.edgeColor = new THREE.Color(color);
   const line = new LineSegments2(geo, mat);
   line.computeLineDistances();
   return line;
@@ -38,12 +42,14 @@ function fatLines(positions, color, widthPx, opacity = 1) {
 function edgeLines(geometry, color, widthPx) {
   const geo = new LineSegmentsGeometry().fromEdgesGeometry(new THREE.EdgesGeometry(geometry, 20));
   const mat = new LineMaterial({ color: new THREE.Color(color).getHex(), linewidth: widthPx });
+  mat.userData.edgeColor = new THREE.Color(color);
   return new LineSegments2(geo, mat);
 }
 
 /** Inverted-hull outline: back faces pushed out along the normal. */
 function hullMaterial(color, thickness) {
   const m = new THREE.MeshBasicMaterial({ color, side: THREE.BackSide });
+  m.userData.edgeColor = new THREE.Color(color);
   m.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader.replace(
       '#include <begin_vertex>',
@@ -106,10 +112,10 @@ function gridRoom(W, H, D, opts = {}) {
   const {
     spacing = 0.05,
     wallColor = '#232d3f',
-    lineColor = '#6f92d8',
-    rimColor = '#f2f6ff',
-    lineWidth = 1.4,
-    rimWidth = 3,
+    lineColor = '#4a5568',
+    rimColor = '#8a919c',
+    lineWidth = 1.2,
+    rimWidth = 2,
     lineOpacity = 1,
   } = opts;
   const g = new THREE.Group();
@@ -191,7 +197,7 @@ function buildGridScene(W, H) {
     new THREE.MeshStandardMaterial({ color: '#c9d4e6', roughness: 0.5 })
   );
   sphere.position.set(W * 0.18, 0, -D * 0.55);
-  const sphereHull = new THREE.Mesh(sphereGeo, hullMaterial('#ffffff', 0.002));
+  const sphereHull = new THREE.Mesh(sphereGeo, hullMaterial(EDGE, 0.002));
   sphere.add(sphereHull);
   root.add(sphere);
 
@@ -199,7 +205,7 @@ function buildGridScene(W, H) {
   const cubeGeo = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
   const cube = new THREE.Mesh(cubeGeo, new THREE.MeshStandardMaterial({ color: '#3f68b5', roughness: 0.6 }));
   cube.position.set(-W * 0.22, -H / 2 + cubeSize / 2, -D * 0.3);
-  cube.add(edgeLines(cubeGeo, '#e6eeff', 2));
+  cube.add(edgeLines(cubeGeo, EDGE, 1.5));
   root.add(cube);
 
   return {
@@ -221,20 +227,20 @@ function buildObjectsScene(W, H) {
   root.add(
     gridRoom(W, H, W * 0.9, {
       wallColor: '#1e2736',
-      lineColor: '#3b5079',
-      rimColor: '#8ea6d6',
+      lineColor: '#333b48',
+      rimColor: '#5c6470',
       lineWidth: 1,
-      rimWidth: 2,
+      rimWidth: 1.5,
     })
   );
 
   const s = Math.min(H / 0.34, W / 0.8); // scale relative to the reference 0.80×0.34 m screen
   const items = [];
-  const OUT = '#f4f8ff';
+  const OUT = EDGE;
 
   function add(mesh, pos, spin, outline) {
     mesh.position.set(pos[0] * W, pos[1] * H, pos[2]);
-    if (outline === 'edges') mesh.add(edgeLines(mesh.geometry, OUT, 2));
+    if (outline === 'edges') mesh.add(edgeLines(mesh.geometry, OUT, 1.5));
     else mesh.add(new THREE.Mesh(mesh.geometry, hullMaterial(OUT, 0.0018 * s)));
     root.add(mesh);
     items.push({ mesh, spin });
@@ -324,7 +330,7 @@ function buildGhostScene(W, H) {
     const [x1, y1] = c[(i + 1) % 4];
     fr.push(x0, y0, 0, x1, y1, 0);
   }
-  root.add(fatLines(fr, '#ffffff', 3));
+  root.add(fatLines(fr, '#b0b0b0', 2));
 
   return {
     root,
