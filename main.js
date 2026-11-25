@@ -1,7 +1,7 @@
 // main.js — app setup, render loop, UI wiring.
 
 import * as THREE from 'three';
-import { applyOffAxisProjection, flatScreenRect, setFlatScreenRect } from './projection.js';
+import { applyOffAxisProjection, flatScreenRect, setFlatScreenRect } from './projection.js?v=3';
 import {
   FaceTracker,
   CameraError,
@@ -9,8 +9,8 @@ import {
   estimateEye,
   effectivePupilPx,
   solveFovFromDistance,
-} from './tracking.js';
-import { buildScene, SCENE_OPTIONS } from './scenes.js';
+} from './tracking.js?v=3';
+import { buildScene, SCENE_OPTIONS } from './scenes.js?v=3';
 
 // ---------------------------------------------------------------------------
 // Settings
