@@ -49,8 +49,12 @@ const DEFS = [
   { group: 'Stereo' },
   { key: 'stereo', label: 'Mode', type: 'select', def: 'dubois', options: STEREO_OPTIONS },
   { key: 'eyeSep', label: 'Eye separation ×', type: 'range', def: 1, step: 0.01, min: 0, max: 1.5 },
-  { key: 'balance', label: 'L/R brightness', type: 'range', def: 0, step: 0.01, min: -0.3, max: 0.3,
-    hint: '+ brightens the left (red) eye, − the right (cyan) eye.' },
+  { key: 'balance', label: 'L/R brightness', type: 'range', def: 0, step: 0.01, min: -0.5, max: 0.5,
+    hint: '+ brightens the left (red) eye and dims the right (cyan) eye.' },
+  { key: 'leakL', label: 'Red lens leak cancel', type: 'range', def: 0, step: 0.01, min: 0, max: 0.6,
+    hint: 'If your RED eye sees the cyan image: raise until those ghosts vanish (Ghosting test scene).' },
+  { key: 'leakR', label: 'Cyan lens leak cancel', type: 'range', def: 0, step: 0.01, min: 0, max: 0.6,
+    hint: 'Same for ghosts seen by the CYAN eye.' },
   { key: 'swapEyes', label: 'Swap eyes', type: 'checkbox', def: false },
 
   { group: 'View' },
@@ -263,6 +267,8 @@ const composeMat = new THREE.ShaderMaterial({
     matR: { value: new THREE.Matrix3() },
     gainL: { value: 1 },
     gainR: { value: 1 },
+    leakL: { value: 0 },
+    leakR: { value: 0 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -275,11 +281,23 @@ const composeMat = new THREE.ShaderMaterial({
     uniform mat3 matR;
     uniform float gainL;
     uniform float gainR;
+    uniform float leakL;
+    uniform float leakR;
     varying vec2 vUv;
     void main() {
       vec3 l = texture2D(mapL, vUv).rgb;
       vec3 r = texture2D(mapR, vUv).rgb;
-      vec3 c = clamp(matL * l, 0.0, 1.0) * gainL + clamp(matR * r, 0.0, 1.0) * gainR;
+      vec3 c = clamp(clamp(matL * l, 0.0, 1.0) * gainL + clamp(matR * r, 0.0, 1.0) * gainR, 0.0, 1.0);
+      // Crosstalk cancellation. A leaky red lens lets the eye see
+      //   red + leakL * (green + blue) / 2.
+      // We can't emit negative light, so instead we add red where the
+      // green/blue is dark: red += leakL * (1 - (g+b)/2). The red eye then
+      // sees red + leakL everywhere — a uniform veil instead of a ghost.
+      // Same idea for the cyan lens leaking red.
+      float gb = 0.5 * (c.g + c.b);
+      float rr = c.r;
+      c.r += leakL * (1.0 - gb);
+      c.gb += vec2(leakR * (1.0 - rr));
       gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
       #include <colorspace_fragment>
     }
@@ -334,6 +352,16 @@ function onResize() {
 }
 window.addEventListener('resize', onResize);
 document.addEventListener('fullscreenchange', onResize);
+document.addEventListener('webkitfullscreenchange', onResize);
+window.addEventListener('orientationchange', () => setTimeout(onResize, 300));
+
+/** Screen size in CSS px, matched to the current orientation (iOS always
+ *  reports screen.width/height in portrait). */
+function screenPx() {
+  let sw = screen.width, sh = screen.height;
+  if (sw > sh !== window.innerWidth > window.innerHeight) [sw, sh] = [sh, sw];
+  return { sw, sh };
+}
 
 // ---------------------------------------------------------------------------
 // Physical viewport: which part of the physical screen the canvas covers.
@@ -343,7 +371,7 @@ const viewRect = flatScreenRect(-0.4, 0.4, -0.17, 0.17);
 const viewInfo = { xL: 0, xR: 0, yB: 0, yT: 0, corrected: false };
 
 function isFullscreen() {
-  return !!document.fullscreenElement;
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
 }
 
 function updateViewRect() {
@@ -353,7 +381,7 @@ function updateViewRect() {
   let corrected = false;
 
   if (settings.windowCorrection && !isFullscreen()) {
-    const sw = screen.width, sh = screen.height;
+    const { sw, sh } = screenPx();
     const iw = window.innerWidth, ih = window.innerHeight;
     if (sw > 0 && sh > 0 && iw > 0 && ih > 0 && (iw < sw - 1 || ih < sh - 1)) {
       const mx = W / sw, my = H / sh;
@@ -492,12 +520,35 @@ function stopCamera() {
 function useMouse() {
   eye.mode = 'mouse';
   intro.classList.add('hidden');
-  showStatus('Mouse mode: move the mouse to move your “head”, scroll to move closer/further.', '', 5000);
+  showStatus('Mouse/touch mode: move the mouse or drag a finger to move your “head”; scroll or pinch to move closer/further.', '', 6000);
 }
 
 // Mouse fallback (handy for testing without a webcam).
+const touches = new Map();
+let pinchStart = null;
+canvas.addEventListener('pointerdown', (e) => {
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touches.size === 2) {
+    const [a, b] = [...touches.values()];
+    pinchStart = { d: Math.hypot(a.x - b.x, a.y - b.y), z: eye.mouse.z };
+  }
+});
+const endTouch = (e) => {
+  touches.delete(e.pointerId);
+  if (touches.size < 2) pinchStart = null;
+};
+canvas.addEventListener('pointerup', endTouch);
+canvas.addEventListener('pointercancel', endTouch);
 canvas.addEventListener('pointermove', (e) => {
   if (eye.mode !== 'mouse') return;
+  if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinchStart && touches.size === 2) {
+    const [a, b] = [...touches.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    // Pinch out (fingers apart) = move closer.
+    eye.mouse.z = Math.min(2, Math.max(0.15, (pinchStart.z * pinchStart.d) / Math.max(d, 1)));
+    return;
+  }
   const nx = e.clientX / window.innerWidth - 0.5;
   const ny = e.clientY / window.innerHeight - 0.5;
   eye.mouse.x = nx * settings.screenW * 1.2;
@@ -556,11 +607,26 @@ function calibrate() {
 // ---------------------------------------------------------------------------
 
 function toggleFullscreen() {
+  const el = document.documentElement;
+  const fail = (e) =>
+    showStatus(
+      `Fullscreen not available${e && e.message ? ` (${e.message})` : ''}. On iPad/iPhone: Share → Add to Home Screen, then open it from the home screen.`,
+      'warn',
+      6000
+    );
   try {
-    if (document.fullscreenElement) document.exitFullscreen();
-    else document.documentElement.requestFullscreen().catch((e) => showStatus(`Fullscreen failed: ${e.message}`, 'warn', 3000));
+    if (isFullscreen()) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else if (el.requestFullscreen) {
+      const p = el.requestFullscreen();
+      if (p && p.catch) p.catch(fail);
+    } else if (el.webkitRequestFullscreen) {
+      el.webkitRequestFullscreen();
+    } else {
+      fail();
+    }
   } catch (e) {
-    showStatus('Fullscreen is not available here.', 'warn', 3000);
+    fail(e);
   }
 }
 
@@ -675,6 +741,8 @@ function frame(now) {
     setMatrices(settings.stereo);
     composeMat.uniforms.gainL.value = 1 + settings.balance;
     composeMat.uniforms.gainR.value = 1 - settings.balance;
+    composeMat.uniforms.leakL.value = settings.leakL;
+    composeMat.uniforms.leakR.value = settings.leakR;
     renderer.setRenderTarget(null);
     renderer.render(composeScene, composeCam);
   }
@@ -705,16 +773,23 @@ function updateDebugText() {
     }
   }
   const physAspect = settings.screenW / settings.screenH;
-  const pxAspect = screen.width / screen.height;
-  lines.push(`screen   ${screen.width}×${screen.height}px  aspect ${pxAspect.toFixed(2)} vs ${physAspect.toFixed(2)} set`);
+  const { sw, sh } = screenPx();
+  const pxAspect = sw / sh;
+  lines.push(`screen   ${sw}×${sh}px  aspect ${pxAspect.toFixed(2)} vs ${physAspect.toFixed(2)} set`);
   if (Math.abs(pxAspect - physAspect) / pxAspect > 0.05) lines.push('         ⚠ W/H aspect differs from the display');
   lines.push(
     `view m   ${viewInfo.xL.toFixed(3)}..${viewInfo.xR.toFixed(3)} × ${viewInfo.yB.toFixed(3)}..${viewInfo.yT.toFixed(3)}` +
       (isFullscreen() ? ' (fullscreen)' : viewInfo.corrected ? ' (window est.)' : '')
   );
-  lines.push(`stereo   ${settings.stereo}  sep ${settings.eyeSep.toFixed(2)}  bal ${settings.balance.toFixed(2)}`);
+  lines.push(`stereo   ${settings.stereo}  sep ${settings.eyeSep.toFixed(2)}  bal ${settings.balance.toFixed(2)}  leak ${settings.leakL.toFixed(2)}/${settings.leakR.toFixed(2)}`);
   debugText.textContent = lines.join('\n');
 }
+
+// Surface runtime errors on screen (handy on iPad, where there's no console).
+window.addEventListener('error', (e) => showStatus(`Error: ${e.message}`, 'error'));
+window.addEventListener('unhandledrejection', (e) =>
+  showStatus(`Error: ${e.reason && e.reason.message ? e.reason.message : e.reason}`, 'error')
+);
 
 onResize();
 rebuildScene();
